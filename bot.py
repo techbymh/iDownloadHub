@@ -45,19 +45,19 @@ def get_video(url, outdir):
 
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 YouTube, TikTok, Facebook বা Instagram লিংক পাঠান, ভিডিও পাঠিয়ে দেব।")
+        "👋 Send me a YouTube, TikTok, Facebook or Instagram link and I'll send you the video.")
 
 async def handle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     m = URL_RE.search(update.message.text or "")
     if not m:
-        await update.message.reply_text("একটা ভিডিও লিংক পাঠান।")
+        await update.message.reply_text("Please send a video link.")
         return
-    msg = await update.message.reply_text("⏳ ডাউনলোড হচ্ছে...")
+    msg = await update.message.reply_text("⏳ Downloading...")
     with tempfile.TemporaryDirectory() as d:
         try:
             path = await asyncio.to_thread(get_video, m.group(), d)
             if not path or os.path.getsize(path) > 50 * 1024 * 1024:
-                await msg.edit_text("❌ ভিডিওটা অনেক বড়, পাঠানো যাচ্ছে না।")
+                await msg.edit_text("❌ The video is too large to send.")
                 return
             with open(path, "rb") as f:
                 await update.message.reply_video(
@@ -65,7 +65,7 @@ async def handle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     read_timeout=300, write_timeout=300)
             await msg.delete()
         except Exception:
-            await msg.edit_text("❌ ডাউনলোড করা গেল না। লিংক ঠিক আছে কিনা দেখুন।")
+            await msg.edit_text("❌ Download failed. Please check the link and try again.")
 
 if __name__ == "__main__":
     threading.Thread(target=run_server, daemon=True).start()
