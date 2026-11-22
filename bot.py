@@ -42,18 +42,18 @@ def fetch(url, fmt, outdir):
         shutil.copy("/etc/secrets/cookies.txt", "/tmp/cookies.txt")
         opts["cookiefile"] = "/tmp/cookies.txt"
     with yt_dlp.YoutubeDL(opts) as y:
-        y.download([url])
+        info = y.extract_info(url, download=True)
     files = glob.glob(f"{outdir}/*")
-    return files[0] if files else None
+    return (files[0] if files else None), info
 
 def get_video(url, outdir):
     # Try the best quality first
-    path = fetch(url, "bv*+ba/b", outdir)
+    path, info = fetch(url, "bv*+ba/b", outdir)
     if path and os.path.getsize(path) > LIMIT:
         os.remove(path)
         # Too big: best quality that fits the limit
-        path = fetch(url, "b[filesize<48M]/b[filesize_approx<48M]/worst", outdir)
-    return path
+        path, info = fetch(url, "b[filesize<48M]/b[filesize_approx<48M]/worst", outdir)
+    return path, info
 
 def extract_audio(video_path, outdir):
     """Extract audio from the video. Returns file path or None."""
@@ -73,6 +73,16 @@ def extract_audio(video_path, outdir):
         return out_mp3
     return None
 
+def audio_meta(info):
+    """Audio title and performer from the video info."""
+    info = info or {}
+    title = (info.get("track") or info.get("title") or "Audio").strip()
+    performer = (info.get("artist") or info.get("uploader")
+                 or info.get("channel") or "").strip()
+    title = title.replace("\n", " ")[:100]
+    performer = performer.replace("\n", " ")[:64]
+    return title, performer
+
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Send me a YouTube, TikTok, Facebook or Instagram link and I'll send you the video.")
@@ -86,7 +96,7 @@ async def handle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     with tempfile.TemporaryDirectory() as d:
         try:
             async with SEM:
-                path = await asyncio.to_thread(get_video, m.group(), d)
+                path, info = await asyncio.to_thread(get_video, m.group(), d)
             if not path or os.path.getsize(path) > 50 * 1024 * 1024:
                 await msg.edit_text("❌ The video is too large to send.")
                 return
@@ -97,13 +107,18 @@ async def handle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     f, supports_streaming=True,
                     read_timeout=300, write_timeout=300)
 
-            # 2) Audio (separate message)
+            # 2) Audio (separate message, named after the video)
             try:
                 audio = await asyncio.to_thread(extract_audio, path, d)
                 if audio and os.path.getsize(audio) <= 50 * 1024 * 1024:
+                    title, performer = audio_meta(info)
+                    safe = re.sub(r'[\\/:*?"<>|]+', "", title).strip()[:60] or "audio"
+                    fname = safe + os.path.splitext(audio)[1]
                     with open(audio, "rb") as a:
                         await update.message.reply_audio(
-                            a, read_timeout=300, write_timeout=300)
+                            a, title=title, performer=performer or None,
+                            filename=fname,
+                            read_timeout=300, write_timeout=300)
             except Exception as e:
                 print("AUDIO ERROR:", e, flush=True)
 
