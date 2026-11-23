@@ -13,6 +13,9 @@ SEM = asyncio.Semaphore(2)  # max 2 downloads at the same time
 # Message sent after the video and audio
 FOOTER_TEXT = "Ai prompt, Movie Apps, Prem!um apps, Editing apps, all here 👉@techbymh👈"
 
+# Line added at the end of every failure message
+SUPPORT_LINE = "Ask for a Solution: @TechByMH"
+
 class Ping(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -98,7 +101,8 @@ async def handle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             async with SEM:
                 path, info = await asyncio.to_thread(get_video, m.group(), d)
             if not path or os.path.getsize(path) > 50 * 1024 * 1024:
-                await msg.edit_text("❌ The video is too large to send.")
+                await msg.edit_text(
+                    "❌ The video is too large to send.\n" + SUPPORT_LINE)
                 return
 
             # 1) Video (no caption)
@@ -132,9 +136,12 @@ async def handle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             err = str(e)
             if "youtube" in err.lower() and any(
                     k in err for k in ("Failed to extract", "Sign in", "429", "403")):
-                await msg.edit_text("⚠️ YouTube is temporarily unavailable. Please try again later.")
+                await msg.edit_text(
+                    "⚠️ YouTube is temporarily unavailable. Please try again later.\n"
+                    + SUPPORT_LINE)
             else:
-                await msg.edit_text("❌ Download failed.\n" + err[:300])
+                await msg.edit_text(
+                    "❌ Download failed.\n" + err[:300] + "\n" + SUPPORT_LINE)
 
 if __name__ == "__main__":
     threading.Thread(target=run_server, daemon=True).start()
