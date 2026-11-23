@@ -129,7 +129,12 @@ async def handle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await msg.delete()
         except Exception as e:
             print("ERROR:", e, flush=True)
-            await msg.edit_text("❌ Download failed.\n" + str(e)[:300])
+            err = str(e)
+            if "youtube" in err.lower() and any(
+                    k in err for k in ("Failed to extract", "Sign in", "429", "403")):
+                await msg.edit_text("⚠️ YouTube is temporarily unavailable. Please try again later.")
+            else:
+                await msg.edit_text("❌ Download failed.\n" + err[:300])
 
 if __name__ == "__main__":
     threading.Thread(target=run_server, daemon=True).start()
