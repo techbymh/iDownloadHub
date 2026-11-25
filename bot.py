@@ -1,4 +1,3 @@
-
 import os, re, glob, asyncio, tempfile, threading, shutil, subprocess
 import datetime, zoneinfo
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -18,14 +17,21 @@ TZ = zoneinfo.ZoneInfo("Asia/Dhaka")
 # Sent videos/audios waiting to be deleted at 12:00 AM: (chat_id, message_id)
 PENDING = []
 
+SITE_URL = "https://idownloadweb.onrender.com/"
+
 # Caption on every video
-VIDEO_CAPTION = "Download it as soon as possible. The video will be deleted at 12:00 AM."
+VIDEO_CAPTION = ("You can download it in whatever quality you prefer "
+                 "using this website: " + SITE_URL)
 
 # Message sent after the video and audio
 FOOTER_TEXT = "Ai prompt, Movie Apps, Prem!um apps, Editing apps, all here 👉@techbymh👈"
 
-# Line added at the end of every failure message
+# Lines added at the end of every failure message
 SUPPORT_LINE = "Ask for a Solution: @TechByMH"
+ERROR_LINE = "You can download it from: " + SITE_URL
+
+def fail_text(text):
+    return text + "\n" + SUPPORT_LINE + "\n" + ERROR_LINE
 
 class Ping(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -126,7 +132,7 @@ async def handle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 path, info = await asyncio.to_thread(get_video, m.group(), d)
             if not path or os.path.getsize(path) > 50 * 1024 * 1024:
                 await msg.edit_text(
-                    "❌ The video is too large to send.\n" + SUPPORT_LINE)
+                    fail_text("❌ The video is too large to send."))
                 return
 
             # 1) Video (with caption, deleted at 12:00 AM)
@@ -162,12 +168,11 @@ async def handle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             err = str(e)
             if "youtube" in err.lower() and any(
                     k in err for k in ("Failed to extract", "Sign in", "429", "403")):
-                await msg.edit_text(
-                    "⚠️ YouTube is temporarily unavailable. Please try again later.\n"
-                    + SUPPORT_LINE)
+                await msg.edit_text(fail_text(
+                    "⚠️ YouTube is temporarily unavailable. Please try again later."))
             else:
-                await msg.edit_text(
-                    "❌ Download failed.\n" + err[:300] + "\n" + SUPPORT_LINE)
+                await msg.edit_text(fail_text(
+                    "❌ Download failed.\n" + err[:300]))
 
 if __name__ == "__main__":
     threading.Thread(target=run_server, daemon=True).start()
