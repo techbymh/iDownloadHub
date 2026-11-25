@@ -1,5 +1,6 @@
 import os, re, glob, asyncio, tempfile, threading, shutil, subprocess
 import datetime, zoneinfo
+from urllib.parse import urlparse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import yt_dlp
 from telegram import Update
@@ -10,6 +11,7 @@ TOKEN = os.environ["BOT_TOKEN"]
 LIMIT = 49 * 1024 * 1024  # Telegram bot limit ~50MB
 URL_RE = re.compile(r"https?://\S+")
 SEM = asyncio.Semaphore(2)  # max 2 downloads at the same time
+DOWNLOAD_TIMEOUT = 600  # seconds, a download longer than this is stopped
 
 # Timezone for the daily cleanup (12:00 AM)
 TZ = zoneinfo.ZoneInfo("Asia/Dhaka")
@@ -18,6 +20,16 @@ TZ = zoneinfo.ZoneInfo("Asia/Dhaka")
 PENDING = []
 
 SITE_URL = "https://idownloadweb.onrender.com/"
+
+# Only these platforms are supported
+SUPPORTED_HOSTS = ("youtube.com", "youtu.be", "facebook.com", "fb.watch",
+                   "instagram.com", "instagr.am", "tiktok.com")
+
+# Message for any other website
+UNSUPPORTED_TEXT = (
+    "❌ Supported Platforms: YouTube, Facebook, Instagram, and TikTok only.\n\n"
+    "Download videos or audio in your preferred quality from here:\n\n"
+    "🔗 " + SITE_URL)
 
 # Caption on every video
 VIDEO_CAPTION = ("You can download it in whatever quality you prefer "
@@ -30,12 +42,20 @@ FOOTER_TEXT = "Ai prompt, Movie Apps, Prem!um apps, Editing apps, all here 👉@
 SUPPORT_LINE = "Ask for a Solution: @TechByMH"
 ERROR_LINE = "You can download it from: " + SITE_URL
 
+def is_supported(url):
+    host = (urlparse(url).hostname or "").lower()
+    return any(host == h or host.endswith("." + h) for h in SUPPORTED_HOSTS)
+
 def fail_text(text):
     return text + "\n" + SUPPORT_LINE + "\n" + ERROR_LINE
 
 def short_error(err):
     """Turn a long technical error into one short, friendly line."""
     e = err.lower()
+    if "live stream" in e or "is live" in e:
+        return "❌ Live streams are not supported."
+    if "timeout" in e:
+        return "❌ Download took too long. Please try again later."
     if "youtube" in e and any(k in err for k in ("Failed to extract", "Sign in", "429", "403")):
         return "⚠️ YouTube is temporarily unavailable. Please try again later."
     if any(k in e for k in ("no video found", "log in", "login", "cookies",
@@ -70,12 +90,18 @@ def fetch(url, fmt, outdir):
         "merge_output_format": "mp4",
         "noplaylist": True,
         "quiet": True,
+        "socket_timeout": 30,
+        # never record live streams (they never end)
+        "match_filter": yt_dlp.utils.match_filter_func("!is_live"),
     }
     if os.path.exists("/etc/secrets/cookies.txt"):
         shutil.copy("/etc/secrets/cookies.txt", "/tmp/cookies.txt")
         opts["cookiefile"] = "/tmp/cookies.txt"
     with yt_dlp.YoutubeDL(opts) as y:
         info = y.extract_info(url, download=True)
+    if info and (info.get("is_live")
+                 or info.get("live_status") in ("is_live", "is_upcoming")):
+        raise ValueError("live stream is not supported")
     files = glob.glob(f"{outdir}/*")
     return (files[0] if files else None), info
 
@@ -138,12 +164,25 @@ async def handle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not m:
         await update.message.reply_text("Please send a video link.")
         return
+    url = m.group()
+
+    # Any other website: send the "supported platforms" message
+    if not is_supported(url):
+        await update.message.reply_text(UNSUPPORTED_TEXT)
+        return
+
     msg = await update.message.reply_text("⏳ Downloading...")
     with tempfile.TemporaryDirectory() as d:
         try:
             async with SEM:
-                path, info = await asyncio.to_thread(get_video, m.group(), d)
-            if not path or os.path.getsize(path) > 50 * 1024 * 1024:
+                path, info = await asyncio.wait_for(
+                    asyncio.to_thread(get_video, url, d),
+                    timeout=DOWNLOAD_TIMEOUT)
+            if not path:
+                await msg.edit_text(
+                    fail_text("❌ Download failed. Please try again later."))
+                return
+            if os.path.getsize(path) > 50 * 1024 * 1024:
                 await msg.edit_text(
                     fail_text("❌ The video is too large to send."))
                 return
@@ -177,8 +216,8 @@ async def handle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
             await msg.delete()
         except Exception as e:
-            print("ERROR:", e, flush=True)  # full error stays in the logs only
-            await msg.edit_text(fail_text(short_error(str(e))))
+            print("ERROR:", repr(e), flush=True)  # full error stays in the logs only
+            await msg.edit_text(fail_text(short_error(str(e) or type(e).__name__)))
 
 if __name__ == "__main__":
     threading.Thread(target=run_server, daemon=True).start()
