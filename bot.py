@@ -12,6 +12,7 @@ LIMIT = 49 * 1024 * 1024  # Telegram bot limit ~50MB
 URL_RE = re.compile(r"https?://\S+")
 SEM = asyncio.Semaphore(2)  # max 2 downloads at the same time
 DOWNLOAD_TIMEOUT = 600  # seconds, a download longer than this is stopped
+COOKIE_SRC = "/etc/secrets/cookies.txt"
 
 # Timezone for the daily cleanup (12:00 AM)
 TZ = zoneinfo.ZoneInfo("Asia/Dhaka")
@@ -83,7 +84,7 @@ def run_server():
     port = int(os.environ.get("PORT", 10000))
     HTTPServer(("0.0.0.0", port), Ping).serve_forever()
 
-def fetch(url, fmt, outdir):
+def fetch(url, fmt, outdir, use_cookies=False):
     opts = {
         "format": fmt,
         "outtmpl": f"{outdir}/%(id)s.%(ext)s",
@@ -94,8 +95,8 @@ def fetch(url, fmt, outdir):
         # never record live streams (they never end)
         "match_filter": yt_dlp.utils.match_filter_func("!is_live"),
     }
-    if os.path.exists("/etc/secrets/cookies.txt"):
-        shutil.copy("/etc/secrets/cookies.txt", "/tmp/cookies.txt")
+    if use_cookies and os.path.exists(COOKIE_SRC):
+        shutil.copy(COOKIE_SRC, "/tmp/cookies.txt")
         opts["cookiefile"] = "/tmp/cookies.txt"
     with yt_dlp.YoutubeDL(opts) as y:
         info = y.extract_info(url, download=True)
@@ -105,13 +106,40 @@ def fetch(url, fmt, outdir):
     files = glob.glob(f"{outdir}/*")
     return (files[0] if files else None), info
 
+def clean_dir(outdir):
+    for f in glob.glob(f"{outdir}/*"):
+        try:
+            os.remove(f)
+        except Exception:
+            pass
+
+def fetch_auto(url, fmt, outdir):
+    """Try without cookies first. If it fails, retry with cookies.
+    Returns (path, info, used_cookies)."""
+    try:
+        path, info = fetch(url, fmt, outdir, use_cookies=False)
+        if path:
+            print("FETCH OK: without cookies", flush=True)
+            return path, info, False
+        raise Exception("no file downloaded")
+    except Exception as e:
+        # No cookie file, or a live stream: do not retry
+        if not os.path.exists(COOKIE_SRC) or "live stream" in str(e).lower():
+            raise
+        print("RETRY WITH COOKIES. First error:", repr(e)[:300], flush=True)
+        clean_dir(outdir)
+        path, info = fetch(url, fmt, outdir, use_cookies=True)
+        print("FETCH OK: with cookies", flush=True)
+        return path, info, True
+
 def get_video(url, outdir):
     # Try the best quality first
-    path, info = fetch(url, "bv*+ba/b", outdir)
+    path, info, used_cookies = fetch_auto(url, "bv*+ba/b", outdir)
     if path and os.path.getsize(path) > LIMIT:
         os.remove(path)
-        # Too big: best quality that fits the limit
-        path, info = fetch(url, "b[filesize<48M]/b[filesize_approx<48M]/worst", outdir)
+        # Too big: best quality that fits the limit (same cookie mode)
+        path, info = fetch(url, "b[filesize<48M]/b[filesize_approx<48M]/worst",
+                           outdir, use_cookies=used_cookies)
     return path, info
 
 def extract_audio(video_path, outdir):
