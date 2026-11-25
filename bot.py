@@ -33,6 +33,19 @@ ERROR_LINE = "You can download it from: " + SITE_URL
 def fail_text(text):
     return text + "\n" + SUPPORT_LINE + "\n" + ERROR_LINE
 
+def short_error(err):
+    """Turn a long technical error into one short, friendly line."""
+    e = err.lower()
+    if "youtube" in e and any(k in err for k in ("Failed to extract", "Sign in", "429", "403")):
+        return "⚠️ YouTube is temporarily unavailable. Please try again later."
+    if any(k in e for k in ("no video found", "log in", "login", "cookies",
+                            "private", "not available", "unavailable",
+                            "members-only", "sign in")):
+        return "❌ Download failed. This video may be private or require login."
+    if "unsupported url" in e:
+        return "❌ Download failed. This link is not supported."
+    return "❌ Download failed. Please try again later."
+
 class Ping(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -164,15 +177,8 @@ async def handle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
             await msg.delete()
         except Exception as e:
-            print("ERROR:", e, flush=True)
-            err = str(e)
-            if "youtube" in err.lower() and any(
-                    k in err for k in ("Failed to extract", "Sign in", "429", "403")):
-                await msg.edit_text(fail_text(
-                    "⚠️ YouTube is temporarily unavailable. Please try again later."))
-            else:
-                await msg.edit_text(fail_text(
-                    "❌ Download failed.\n" + err[:300]))
+            print("ERROR:", e, flush=True)  # full error stays in the logs only
+            await msg.edit_text(fail_text(short_error(str(e))))
 
 if __name__ == "__main__":
     threading.Thread(target=run_server, daemon=True).start()
